@@ -5,7 +5,7 @@ import (
 )
 
 func TestDBus(t *testing.T) {
-	con, err := NewSessionBus()
+	con, err := Connect(SessionBus)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

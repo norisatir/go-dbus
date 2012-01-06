@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/kr/pretty.go"
 	"net"
 	"os"
-	"regexp"
+	"strings"
+)
+
+type StandardBus int
+
+const (
+	SessionBus StandardBus = iota
+	SystemBus
 )
 
 const dbusXMLIntro = `
@@ -95,9 +101,8 @@ type signalHandler struct {
 }
 
 type Connection struct {
-	path              string
+	addressMap        map[string]string
 	uniqName          string
-	guid              string
 	methodCallReplies map[uint32](func(msg *Message))
 	signalMatchRules  []signalHandler
 	conn              net.Conn
@@ -117,40 +122,47 @@ type Interface struct {
 	intro InterfaceData
 }
 
-func NewSessionBus() (*Connection, error) {
-	bus := new(Connection)
-	bus.path = os.Getenv("DBUS_SESSION_BUS_ADDRESS")
+func Connect(busType StandardBus) (*Connection, error) {
+	var address string
 
-	re, _ := regexp.Compile("^unix:abstract=(.*),guid=(.*)")
+	switch busType {
+	case SessionBus:
+		address = os.Getenv("DBUS_SESSION_BUS_ADDRESS")
 
-	m := re.FindAllStringSubmatch(bus.path, -1)
-	if nil != m {
-		abPath := m[0][1] // get regexp 1st group
-		addr, err := net.ResolveUnixAddr("unix", "@"+abPath)
-		if err != nil {
-			return nil, err
+	case SystemBus:
+		if address = os.Getenv("DBUS_SYSTEM_BUS_ADDRESS"); len(address) == 0 {
+			address = "unix:path=/var/run/dbus/system_bus_socket"
 		}
-		conn, err := net.DialUnix("unix", nil, addr)
-		if err != nil {
-			return nil, err
-		}
-		bus.conn = conn
-		return bus, nil
+
+	default:
+		return nil, errors.New("Unknown bus")
 	}
 
-	return nil, errors.New("NewSessionBus Failed")
-}
+	if len(address) == 0 {
+		return nil, errors.New("Unknown bus address")
+	}
+	transport := address[:strings.Index(address, ":")]
 
-func NewSystemBus() (*Connection, error) {
 	bus := new(Connection)
-	bus.path = "unix:path=/var/run/dbus/system_bus_socket"
+	bus.addressMap = make(map[string]string)
+	for _, pair := range strings.Split(address[len(transport)+1:], ",") {
+		pair := strings.Split(pair, "=")
+		bus.addressMap[pair[0]] = pair[1]
+	}
 
-	addr, _ := net.ResolveUnixAddr("unix", "/var/run/dbus/system_bus_socket")
-	conn, err := net.DialUnix("unix", nil, addr)
-	if err != nil {
+	var ok bool
+	if address, ok = bus.addressMap["path"]; ok {
+	} else if address, ok = bus.addressMap["abstract"]; ok {
+		address = "@" + address
+	} else {
+		return nil, errors.New("Unknown address key")
+	}
+
+	var err error
+	if bus.conn, err = net.Dial(transport, address); err != nil {
 		return nil, err
 	}
-	bus.conn = conn
+
 	return bus, nil
 }
 
@@ -217,7 +229,6 @@ func (p *Connection) _MessageDispatch(msg *Message) {
 		}
 	case ERROR:
 		fmt.Println("ERROR")
-		pretty.Printf("%# v", msg)
 	}
 }
 
