@@ -11,6 +11,33 @@ Installation
 Usage
 =====
 
+Methods
+-------
+
+Methods is obtained with
+
+    meth, err := conn.Object(dest, path).Interface(iface).Method(method)
+
+They are called with
+
+    out, err := conn.Call(meth)
+
+Signals
+-------
+
+Signals are obtained with
+
+    sig, err := conn.Object(dest, path).Interface(iface).Signal(signal)
+
+they are emitted with
+
+    err = conn.Emit(sig)
+
+**TODO** Add signal handling usage.
+
+An example
+----------
+
 ```go
 // Issue OSD notifications according to the Desktop Notifications Specification 1.1
 //      http://people.canonical.com/~agateau/notifications-1.1/spec/index.html
@@ -25,6 +52,7 @@ func main() {
     var (
         err error
         conn *dbus.Connection
+        method *dbus.Method
         out []interface{}
     )
 
@@ -37,25 +65,28 @@ func main() {
     }
 
     // Get objects.
-    obj := conn.GetObject("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+    obj := conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
 
     // Introspect objects.
-    out, err = conn.CallMethod(
-        conn.Interface(obj, "org.freedesktop.DBus.Introspectable"), "Introspect")
+    var intro dbus.Introspect
+    method, err = obj.Interface("org.freedesktop.DBus.Introspectable").Method("Introspect")
+    if err != nil {
+        log.Fatal(err)
+    }
+    out, err = conn.Call(method)
     if err != nil {
         log.Fatal("Introspect error:", err)
     }
-    var intro dbus.Introspect
     intro, err = dbus.NewIntrospect(out[0].(string))
-    method := intro.GetInterfaceData("org.freedesktop.Notifications").GetMethodData("Notify")
-    log.Printf("%s in:%s out:%s", method.GetName(), method.GetInSignature(), method.GetOutSignature())
+    m := intro.GetInterfaceData("org.freedesktop.Notifications").GetMethodData("Notify")
+    log.Printf("%s in:%s out:%s", m.GetName(), m.GetInSignature(), m.GetOutSignature())
 
     // Call object methods.
-    out, err = conn.CallMethod(
-        conn.Interface(
-            conn.GetObject("org.freedesktop.Notifications", "/org/freedesktop/Notifications"),
-            "org.freedesktop.Notifications"),
-        "Notify",
+    method, err = obj.Interface("org.freedesktop.Notifications").Method("Notify")
+    if err != nil {
+        log.Fatal(err)
+    }
+    out, err = conn.Call(method,
 		"dbus-tutorial", uint32(0), "",
         "dbus-tutorial", "You've been notified!",
 		[]interface{}{}, map[string]interface{}{}, int32(-1))

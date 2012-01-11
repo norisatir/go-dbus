@@ -122,6 +122,34 @@ type Interface struct {
 	intro InterfaceData
 }
 
+type Method struct {
+	iface *Interface
+	data MethodData
+}
+
+type Signal struct {
+	iface *Interface
+	data SignalData
+}
+
+// Retrieve a method by name.
+func (iface *Interface) Method(name string) (*Method, error) {
+	method := iface.intro.GetMethodData(name)
+	if nil == method {
+		return nil, errors.New("Invalid Method")
+	}
+	return &Method{iface, method}, nil
+}
+
+// Retrieve a signal by name.
+func (iface *Interface) Signal(name string) (*Signal, error) {
+	signal := iface.intro.GetSignalData(name)
+	if nil == signal {
+		return nil, errors.New("Invalid Signalx")
+	}
+	return &Signal{iface, signal}, nil
+}
+
 func Connect(busType StandardBus) (*Connection, error) {
 	var address string
 
@@ -264,7 +292,9 @@ func (p *Connection) _SendSync(msg *Message, callback func(*Message)) error {
 }
 
 func (p *Connection) _SendHello() error {
-	p.CallMethod(p.proxy, "Hello")
+	if method, err := p.proxy.Method("Hello"); err == nil {
+		p.Call(method)
+	}
 	return nil
 }
 
@@ -289,8 +319,8 @@ func (p *Connection) _GetIntrospect(dest string, path string) Introspect {
 	return intro
 }
 
-func (p *Connection) Interface(obj *Object, name string) *Interface {
-
+// Retrieve an interface by name.
+func (obj *Object) Interface(name string) *Interface {
 	if obj == nil || obj.intro == nil {
 		return nil
 	}
@@ -323,20 +353,17 @@ func (p *Connection) _GetProxy() *Interface {
 	return iface
 }
 
-func (p *Connection) CallMethod(iface *Interface, name string, args ...interface{}) ([]interface{}, error) {
-	method := iface.intro.GetMethodData(name)
-	if nil == method {
-		return nil, errors.New("Invalid Method")
-	}
-
+// Call a method with the given arguments.
+func (p *Connection) Call(method *Method, args ...interface{}) ([]interface{}, error) {
+	iface := method.iface
 	msg := NewMessage()
 
 	msg.Type = METHOD_CALL
 	msg.Path = iface.obj.path
 	msg.Iface = iface.name
 	msg.Dest = iface.obj.dest
-	msg.Member = name
-	msg.Sig = method.GetInSignature()
+	msg.Member = method.data.GetName()
+	msg.Sig = method.data.GetInSignature()
 	if len(args) > 0 {
 		msg.Params = args[:]
 	}
@@ -349,12 +376,9 @@ func (p *Connection) CallMethod(iface *Interface, name string, args ...interface
 	return ret, nil
 }
 
-func (p *Connection) EmitSignal(iface *Interface, name string, args ...interface{}) error {
-
-	signal := iface.intro.GetSignalData(name)
-	if nil == signal {
-		return errors.New("Invalid Signalx")
-	}
+// Emit a signal with the given arguments.
+func (p *Connection) Emit(signal *Signal, args ...interface{}) error {
+	iface := signal.iface
 
 	msg := NewMessage()
 
@@ -362,8 +386,8 @@ func (p *Connection) EmitSignal(iface *Interface, name string, args ...interface
 	msg.Path = iface.obj.path
 	msg.Iface = iface.name
 	msg.Dest = iface.obj.dest
-	msg.Member = name
-	msg.Sig = signal.GetSignature()
+	msg.Member = signal.data.GetName()
+	msg.Sig = signal.data.GetSignature()
 	msg.Params = args[:]
 
 	buff, _ := msg._Marshal()
@@ -372,7 +396,8 @@ func (p *Connection) EmitSignal(iface *Interface, name string, args ...interface
 	return err
 }
 
-func (p *Connection) GetObject(dest string, path string) *Object {
+// Retrieve a specified object.
+func (p *Connection) Object(dest string, path string) *Object {
 
 	obj := new(Object)
 	obj.path = path
@@ -382,7 +407,10 @@ func (p *Connection) GetObject(dest string, path string) *Object {
 	return obj
 }
 
-func (p *Connection) AddSignalHandler(mr *MatchRule, proc func(*Message)) {
-	p.signalMatchRules = append(p.signalMatchRules, signalHandler{*mr, proc})
-	p.CallMethod(p.proxy, "AddMatch", mr._ToString())
+// Handle received signals.
+func (p *Connection) Handle(rule *MatchRule, handler func(*Message)) {
+	p.signalMatchRules = append(p.signalMatchRules, signalHandler{*rule, handler})
+	if method, err := p.proxy.Method("AddMatch"); err == nil {
+		p.Call(method, rule._ToString())
+	}
 }

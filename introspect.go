@@ -57,6 +57,7 @@ type MethodData interface {
 }
 
 type SignalData interface {
+	GetName() string
 	GetSignature() string
 }
 
