@@ -30,15 +30,15 @@ func (p *AuthExternal) Authenticate() string {
 type authStatus int
 
 const (
-	STARTING = iota
-	WAITING_FOR_DATA
-	WAITING_FOR_OK
-	WAITING_FOR_REJECT
-	AUTH_CONTINUE
-	AUTH_OK
-	AUTH_ERROR
-	AUTHENTICATED
-	AUTH_NEXT
+	statusStarting authStatus = iota
+	statusWaitingForData
+	statusWaitingForOk
+	statusWaitingForReject
+	statusAuthContinue
+	statusAuthOk
+	statusAuthError
+	statusAuthenticated
+	statusAuthNext
 )
 
 type authState struct {
@@ -79,8 +79,8 @@ func (p *authState) Authenticate(conn net.Conn) error {
 	p.conn = conn
 	p.conn.Write([]byte("\x00"))
 	p._NextAuthenticator()
-	p.status = STARTING
-	for p.status != AUTHENTICATED {
+	p.status = statusStarting
+	for p.status != statusAuthenticated {
 		if nil == p.auth {
 			return ErrAuthFailed
 		}
@@ -94,21 +94,21 @@ func (p *authState) Authenticate(conn net.Conn) error {
 func (p *authState) _NextState() (err error) {
 	nextMsg := p._NextMessage()
 
-	if STARTING == p.status {
+	if statusStarting == p.status {
 		switch nextMsg[0] {
 		case "CONTINUE":
-			p.status = WAITING_FOR_DATA
+			p.status = statusWaitingForData
 		case "OK":
-			p.status = WAITING_FOR_OK
+			p.status = statusWaitingForOk
 		}
 	}
 
 	switch p.status {
-	case WAITING_FOR_DATA:
+	case statusWaitingForData:
 		err = p._WaitingForData(nextMsg)
-	case WAITING_FOR_OK:
+	case statusWaitingForOk:
 		err = p._WaitingForOK(nextMsg)
-	case WAITING_FOR_REJECT:
+	case statusWaitingForReject:
 		err = p._WaitingForReject(nextMsg)
 	}
 
@@ -121,13 +121,13 @@ func (p *authState) _WaitingForData(msg []string) error {
 		return ErrAuthUnknownCommand
 	case "REJECTED":
 		p._NextAuthenticator()
-		p.status = WAITING_FOR_DATA
+		p.status = statusWaitingForData
 	case "OK":
 		p._Send("BEGIN")
-		p.status = AUTHENTICATED
+		p.status = statusAuthenticated
 	default:
 		p._Send("ERROR")
-		p.status = WAITING_FOR_DATA
+		p.status = statusWaitingForData
 	}
 	return nil
 }
@@ -136,16 +136,16 @@ func (p *authState) _WaitingForOK(msg []string) error {
 	switch msg[0] {
 	case "OK":
 		p._Send("BEGIN")
-		p.status = AUTHENTICATED
+		p.status = statusAuthenticated
 	case "REJECT":
 		p._NextAuthenticator()
-		p.status = WAITING_FOR_DATA
+		p.status = statusWaitingForData
 	case "DATA", "ERROR":
 		p._Send("CANCEL")
-		p.status = WAITING_FOR_REJECT
+		p.status = statusWaitingForReject
 	default:
 		p._Send("ERROR")
-		p.status = WAITING_FOR_OK
+		p.status = statusWaitingForOk
 	}
 
 	return nil
@@ -155,7 +155,7 @@ func (p *authState) _WaitingForReject(msg []string) error {
 	switch msg[0] {
 	case "REJECT":
 		p._NextAuthenticator()
-		p.status = WAITING_FOR_OK
+		p.status = statusWaitingForOk
 	default:
 		return ErrAuthUnknownCommand
 	}
