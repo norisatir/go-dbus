@@ -45,8 +45,8 @@ func TestDBus(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	if err = con.Initialize(); err != nil {
-		t.Fatal("Failed Connection.Initialize:", err.Error())
+	if err = con.Authenticate(); err != nil {
+		t.Fatal("Failed Connection.Authenticate:", err.Error())
 	}
 
 	for i, test := range callTests {

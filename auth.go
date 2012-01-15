@@ -1,163 +1,151 @@
 package dbus
 
 import (
-	"container/list"
+	"bufio"
+	"bytes"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
-	"fmt"
-	"net"
+	"io"
 	"os"
-	"strings"
-)
-
-var (
-	ErrAuthUnknownCommand = errors.New("UnknowAuthCommand")
-	ErrAuthFailed         = errors.New("AuthenticationFailed")
+	"strconv"
 )
 
 type Authenticator interface {
-	Mechanism() string
-	Authenticate() string
+	Mechanism() []byte
+	InitialResponse() []byte
+	ProcessData([]byte) ([]byte, error)
 }
 
 type AuthExternal struct {
 }
 
-func (p *AuthExternal) Mechanism() string { return "EXTERNAL" }
-func (p *AuthExternal) Authenticate() string {
-	return fmt.Sprintf("%x", fmt.Sprintf("%d", os.Getuid()))
+func (p *AuthExternal) Mechanism() []byte {
+	return []byte("EXTERNAL")
 }
 
-type authStatus int
-
-const (
-	statusStarting authStatus = iota
-	statusWaitingForData
-	statusWaitingForOk
-	statusWaitingForReject
-	statusAuthContinue
-	statusAuthOk
-	statusAuthError
-	statusAuthenticated
-	statusAuthNext
-)
-
-type authState struct {
-	status   authStatus
-	auth     Authenticator
-	authList list.List
-	conn     net.Conn
+func (p *AuthExternal) InitialResponse() []byte {
+	uid := []byte(strconv.Itoa(os.Getuid()))
+	uidHex := make([]byte, hex.EncodedLen(len(uid)))
+	hex.Encode(uidHex, uid)
+	return uidHex
 }
 
-func (p *authState) AddAuthenticator(auth Authenticator) {
-	p.authList.PushBack(auth)
+func (p *AuthExternal) ProcessData([]byte) ([]byte, error) {
+	return nil, errors.New("Unexpected Response")
 }
 
-func (p *authState) _NextAuthenticator() {
-	if p.authList.Len() == 0 {
-		p.auth = nil
-		return
+type AuthDbusCookieSha1 struct {
+}
+
+func (p *AuthDbusCookieSha1) Mechanism() []byte {
+	return []byte("DBUS_COOKIE_SHA1")
+}
+
+func (p *AuthDbusCookieSha1) InitialResponse() []byte {
+	user := []byte(os.Getenv("USER"))
+	userHex := make([]byte, hex.EncodedLen(len(user)))
+	hex.Encode(userHex, user)
+	return userHex
+}
+
+func (p *AuthDbusCookieSha1) ProcessData(mesg []byte) ([]byte, error) {
+	decodedLen, err := hex.Decode(mesg, mesg)
+	if err != nil {
+		return nil, err
 	}
+	mesgTokens := bytes.SplitN(mesg[:decodedLen], []byte(" "), 3)
 
-	p.auth, _ = p.authList.Front().Value.(Authenticator)
-	p.authList.Remove(p.authList.Front())
-	msg := strings.Join([]string{"AUTH", p.auth.Mechanism(), p.auth.Authenticate()}, " ")
-	p._Send(msg)
-}
-
-func (p *authState) _NextMessage() []string {
-	b := make([]byte, 4096)
-	p.conn.Read(b)
-	retstr := string(b)
-	return strings.SplitN(strings.Trim(retstr, " "), " ", -1)
-}
-
-func (p *authState) _Send(msg string) {
-	p.conn.Write([]byte(msg + "\r\n"))
-}
-
-func (p *authState) Authenticate(conn net.Conn) error {
-	p.conn = conn
-	p.conn.Write([]byte("\x00"))
-	p._NextAuthenticator()
-	p.status = statusStarting
-	for p.status != statusAuthenticated {
-		if nil == p.auth {
-			return ErrAuthFailed
-		}
-		if err := p._NextState(); err != nil {
-			return err
-		}
+	file, err := os.Open(os.Getenv("HOME") + "/.dbus-keyrings/" + string(mesgTokens[0]))
+	if err != nil {
+		return nil, err
 	}
-	return nil
-}
+	defer file.Close()
+	fileStream := bufio.NewReader(file)
 
-func (p *authState) _NextState() (err error) {
-	nextMsg := p._NextMessage()
-
-	if statusStarting == p.status {
-		switch nextMsg[0] {
-		case "CONTINUE":
-			p.status = statusWaitingForData
-		case "OK":
-			p.status = statusWaitingForOk
+	var cookie []byte
+	for {
+		line, _, err := fileStream.ReadLine()
+		if err == io.EOF {
+			return nil, errors.New("SHA1 Cookie not found")
+		} else if err != nil {
+			return nil, err
+		}
+		cookieTokens := bytes.SplitN(line, []byte(" "), 3)
+		if bytes.Compare(cookieTokens[0], mesgTokens[1]) == 0 {
+			cookie = cookieTokens[2]
+			break
 		}
 	}
 
-	switch p.status {
-	case statusWaitingForData:
-		err = p._WaitingForData(nextMsg)
-	case statusWaitingForOk:
-		err = p._WaitingForOK(nextMsg)
-	case statusWaitingForReject:
-		err = p._WaitingForReject(nextMsg)
+	challenge := make([]byte, len(mesgTokens[2]))
+	if _, err = rand.Read(challenge); err != nil {
+		return nil, err
 	}
 
-	return
-}
-
-func (p *authState) _WaitingForData(msg []string) error {
-	switch msg[0] {
-	case "DATA":
-		return ErrAuthUnknownCommand
-	case "REJECTED":
-		p._NextAuthenticator()
-		p.status = statusWaitingForData
-	case "OK":
-		p._Send("BEGIN")
-		p.status = statusAuthenticated
-	default:
-		p._Send("ERROR")
-		p.status = statusWaitingForData
-	}
-	return nil
-}
-
-func (p *authState) _WaitingForOK(msg []string) error {
-	switch msg[0] {
-	case "OK":
-		p._Send("BEGIN")
-		p.status = statusAuthenticated
-	case "REJECT":
-		p._NextAuthenticator()
-		p.status = statusWaitingForData
-	case "DATA", "ERROR":
-		p._Send("CANCEL")
-		p.status = statusWaitingForReject
-	default:
-		p._Send("ERROR")
-		p.status = statusWaitingForOk
+	for temp := challenge; ; {
+		if index := bytes.IndexAny(temp, " \t"); index == -1 {
+			break
+		} else if _, err := rand.Read(temp[index : index+1]); err != nil {
+			return nil, err
+		} else {
+			temp = temp[index:]
+		}
 	}
 
-	return nil
+	hash := sha1.New()
+	if _, err := hash.Write(bytes.Join([][]byte{mesgTokens[2], challenge, cookie}, []byte(":"))); err != nil {
+		return nil, err
+	}
+
+	resp := bytes.Join([][]byte{challenge, []byte(hex.EncodeToString(hash.Sum(nil)))}, []byte(" "))
+	respHex := make([]byte, hex.EncodedLen(len(resp)))
+	hex.Encode(respHex, resp)
+	return append([]byte("DATA "), respHex...), nil
 }
 
-func (p *authState) _WaitingForReject(msg []string) error {
-	switch msg[0] {
-	case "REJECT":
-		p._NextAuthenticator()
-		p.status = statusWaitingForOk
-	default:
-		return ErrAuthUnknownCommand
+func min(l, r int) int {
+	if l < r {
+		return l
+	}
+	return r
+}
+
+func (p *Connection) _Authenticate(mech Authenticator) error {
+	inStream := bufio.NewReader(p.conn)
+	msg := bytes.Join([][]byte{[]byte("AUTH"), mech.Mechanism(), mech.InitialResponse()}, []byte(" "))
+	_, err := p.conn.Write(append(msg, "\r\n"...))
+
+	for {
+		mesg, _, _ := inStream.ReadLine()
+
+		switch {
+		case bytes.HasPrefix(mesg, []byte("DATA")):
+			var resp []byte
+			resp, err = mech.ProcessData(mesg[min(len("DATA "), len(mesg)):])
+			if err != nil {
+				p.conn.Write([]byte("CANCEL\r\n"))
+			}
+			p.conn.Write(append(resp, "\r\n"...))
+
+		case bytes.HasPrefix(mesg, []byte("OK")),
+			bytes.HasPrefix(mesg, []byte("AGREE_UNIX_FD")):
+			p.conn.Write([]byte("BEGIN\r\n"))
+			return nil
+
+		case bytes.HasPrefix(mesg, []byte("REJECTED")):
+			if err != nil {
+				return err
+			}
+			return errors.New("Rejected: " + string(mesg[min(len("REJECTED "), len(mesg)):]))
+
+		case bytes.HasPrefix(mesg, []byte("ERROR")):
+			return errors.New("Error: " + string(mesg[min(len("ERROR "), len(mesg)):]))
+
+		default:
+			p.conn.Write([]byte("ERROR\r\n"))
+		}
 	}
 	return nil
 }
