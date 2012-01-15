@@ -10,7 +10,7 @@ func TestUnmarshal(t *testing.T) {
 	if nil != e {
 		t.Error("Unmarshal Failed")
 	}
-	if METHOD_CALL != msg.Type {
+	if TypeMethodCall != msg.Type {
 		t.Error("#1 Failed :", msg.Type)
 	}
 	if "/org/freedesktop/DBus" != msg.Path {
@@ -31,7 +31,7 @@ func TestMarshal(t *testing.T) {
 	teststr := "l\x01\x00\x01\x00\x00\x00\x00\x01\x00\x00\x00m\x00\x00\x00\x01\x01o\x00\x15\x00\x00\x00/org/freedesktop/DBus\x00\x00\x00\x02\x01s\x00\x14\x00\x00\x00org.freedesktop.DBus\x00\x00\x00\x00\x03\x01s\x00\x05\x00\x00\x00Hello\x00\x00\x00\x06\x01s\x00\x14\x00\x00\x00org.freedesktop.DBus\x00\x00\x00\x00"
 
 	msg := NewMessage()
-	msg.Type = METHOD_CALL
+	msg.Type = TypeMethodCall
 	msg.Flags = MessageFlag(0)
 	msg.Path = "/org/freedesktop/DBus"
 	msg.Dest = "org.freedesktop.DBus"

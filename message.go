@@ -5,21 +5,33 @@ import (
 	"sync"
 )
 
-type MessageType int
+// See the D-Bus tutorial for information about message types.
+//		http://dbus.freedesktop.org/doc/dbus-tutorial.html#messages
+type MessageType uint8
 
 const (
-	INVALID       = 0
-	METHOD_CALL   = 1
-	METHOD_RETURN = 2
-	ERROR         = 3
-	SIGNAL        = 4
+	TypeInvalid MessageType = iota
+	TypeMethodCall
+	TypeMethodReturn
+	TypeError
+	TypeSignal
 )
 
-type MessageFlag int
+var messageTypeString = map[MessageType]string{
+	TypeInvalid:      "invalid",
+	TypeMethodCall:   "method_call",
+	TypeMethodReturn: "method_return",
+	TypeSignal:       "signal",
+	TypeError:        "error",
+}
+
+func (t MessageType) String() string { return messageTypeString[t] }
+
+type MessageFlag uint8
 
 const (
-	NO_REPLY_EXPECTED = 0x1
-	NO_AUTO_START     = 0x2
+	FlagNoReplyExpected MessageFlag = 1 << iota
+	FlagNoAutoStart
 )
 
 type Message struct {
@@ -50,6 +62,7 @@ func _GetNewSerial() int {
 	return serial
 }
 
+// Create a new message with Flags == 0 and Protocol == 1.
 func NewMessage() *Message {
 	msg := new(Message)
 
